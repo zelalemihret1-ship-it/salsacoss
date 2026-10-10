@@ -1,527 +1,415 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#191919">
-<title>Salsacos | Order Online</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+import json
+import sqlite3
+import secrets
+import logging
+import threading
+from pathlib import Path
+from datetime import datetime
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-<style>
-:root {
-  --bg:#f7f5f0;
-  --card:#fff;
-  --ink:#191919;
-  --muted:#777;
-  --accent:#e85d25;
-  --line:#ece7df;
-}
-* {box-sizing:border-box}
-body {
-  margin:0;background:var(--bg);color:var(--ink);
-  font-family:system-ui,-apple-system,Segoe UI,sans-serif;
-  padding-bottom:100px
-}
-header {
-  background:#191919;color:#fff;padding:22px 18px 20px;
-  border-radius:0 0 24px 24px
-}
-.eyebrow {color:#ffc49f;font-size:12px;font-weight:800;letter-spacing:1.5px}
-h1 {margin:5px 0;font-size:28px}
-header p {margin:5px 0 0;color:#ddd;font-size:14px}
-.wrap {max-width:760px;margin:auto}
-.categories {
-  display:flex;gap:8px;overflow:auto;padding:16px 14px 8px
-}
-.chip,.opt {
-  border:1px solid var(--line);background:#fff;border-radius:12px;
-  padding:10px 14px;white-space:nowrap;font-weight:700;color:#444
-}
-.chip {border-radius:99px}
-.chip.active,.opt.active {
-  background:#fff1e9;color:#a43d12;border-color:var(--accent)
-}
-.section-title {
-  display:flex;justify-content:space-between;align-items:center;
-  padding:12px 16px 8px
-}
-.section-title h2 {font-size:18px;margin:0}
-.section-title span,.notice {font-size:12px;color:var(--muted)}
-.grid {
-  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:10px;padding:0 12px
-}
-.item {
-  background:#fff;border:1px solid var(--line);border-radius:16px;
-  padding:13px;display:flex;flex-direction:column;min-height:150px
-}
-.emoji {font-size:30px}
-.item h3 {font-size:14px;margin:8px 0 4px}
-.price {font-weight:800;margin-top:auto;padding:7px 0 10px}
-.add,.primary {
-  background:var(--accent);color:white;border:0;border-radius:11px;
-  padding:12px;font-weight:850;cursor:pointer
-}
-.qty {display:flex;align-items:center;justify-content:space-between;gap:8px}
-.qty button {
-  width:34px;height:32px;border:0;border-radius:9px;
-  background:#f1e9e2;font-size:18px;font-weight:800
-}
-.cartbar {
-  position:fixed;bottom:0;left:0;right:0;background:white;
-  border-top:1px solid var(--line);
-  padding:12px 14px calc(12px + env(safe-area-inset-bottom));z-index:5
-}
-.cartinner {
-  max-width:730px;margin:auto;display:flex;align-items:center;gap:12px
-}
-.cartinfo {flex:1}
-.cartinfo b {display:block}
-.cartinfo small {color:var(--muted)}
-.panel {
-  margin:14px 12px;background:#fff;border:1px solid var(--line);
-  border-radius:16px;padding:16px
-}
-.panel h2 {font-size:18px;margin:0 0 12px}
-.field {display:block;margin:12px 0}
-.field span {display:block;font-size:13px;font-weight:750;margin-bottom:6px}
-.field input,.field select,.field textarea {
-  width:100%;padding:12px;border:1px solid #ded8cf;
-  border-radius:10px;font:inherit;background:white
-}
-.field textarea {min-height:76px;resize:vertical}
-.options {display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.opt {padding:11px 5px;white-space:normal}
-.summaryline {
-  display:flex;justify-content:space-between;gap:10px;
-  padding:8px 0;border-bottom:1px solid #f0ece7;font-size:14px
-}
-.total {
-  display:flex;justify-content:space-between;font-weight:900;
-  font-size:18px;padding-top:12px
-}
-.notice {line-height:1.6}
-.hide {display:none!important}
-.error {color:#b3261e;font-size:13px;margin:8px 0}
-.success {text-align:center;padding:28px 16px}
-.success .big {font-size:54px}
-.success h2 {margin:8px}
-.success p {line-height:1.7;color:#555}
-.age {display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0}
-button:disabled {opacity:.5;cursor:not-allowed}
-@media(min-width:600px) {
-  .grid {grid-template-columns:repeat(3,minmax(0,1fr))}
-}
-</style>
-</head>
+from html import escape
 
-<body>
-<div class="wrap">
+from telegram import (
+    Update,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-<header>
-  <div class="eyebrow">FRESH • FLAVORFUL • SALSACOS</div>
-  <h1>What are you craving? 🌮</h1>
-  <p>Order your favorites in a few taps.</p>
-</header>
+# =====================================================
+# CONFIGURATION
+# =====================================================
 
-<div id="menuView">
-  <nav class="categories" id="categories"></nav>
-  <div class="section-title">
-    <h2 id="categoryTitle">Food</h2>
-    <span>Prices in ETB</span>
-  </div>
-  <div class="grid" id="items"></div>
-</div>
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = BASE_DIR / "config.json"
+DATABASE = BASE_DIR / "salsacos_orders.db"
+INDEX_FILE = BASE_DIR / "index.html"
 
-<div id="checkoutView" class="hide">
-  <div class="section-title">
-    <h2>Your order</h2>
-    <button class="chip" id="backMenu">← Menu</button>
-  </div>
+# If hosting locally for testing, change to "http://localhost:8080/"
+# Otherwise, use your GitHub Pages link where index.html is hosted.
+WEB_APP_URL = "https://zelalemihret1-ship-it.github.io/salsacoss/"
+ORDER_CHANNEL = "@salsacos"
+SUPPORT_USERNAME = "@zilasun"
+DELIVERY_FEE = 50
+HTTP_PORT = 8080
 
-  <div class="panel">
-    <div id="checkoutSummary"></div>
-    <div class="total">
-      <span>Total</span><span id="checkoutTotal">0 ETB</span>
-    </div>
-  </div>
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
-  <div class="panel">
-    <h2>1. Order type</h2>
-    <div class="options" id="orderOptions">
-      <button class="opt active" data-order="delivery">🚚 Delivery</button>
-      <button class="opt" data-order="pickup">🛍️ Pickup</button>
-      <button class="opt" data-order="dine_in">🍽️ Dine-in</button>
-    </div>
-    <p class="notice">Delivery fee: 50 ETB. Pickup and dine-in have no delivery fee.</p>
-  </div>
 
-  <div class="panel">
-    <h2>2. Your details</h2>
-    <label class="field">
-      <span>Full name *</span>
-      <input id="customerName" autocomplete="name" placeholder="Your full name" maxlength="100">
-    </label>
-    <label class="field">
-      <span>Phone number *</span>
-      <input id="customerPhone" autocomplete="tel" type="tel" placeholder="09xxxxxxxx">
-    </label>
-    <div id="addressWrap">
-      <label class="field">
-        <span>Delivery address or landmark *</span>
-        <textarea id="customerAddress" placeholder="Area, building, nearby landmark"></textarea>
-      </label>
-      <button class="opt" id="gpsButton" type="button">📍 Use my location</button>
-      <p class="notice" id="gpsStatus">Or enter your address manually.</p>
-    </div>
-  </div>
+def load_config():
+    """Load config.json, or create it automatically if it doesn't exist."""
+    if not CONFIG_FILE.exists():
+        example = {
+            "bot_token": "8948007276:AAGsoN_WgJw8DrjpO6TlauHAW2fAXzRbfQU",
+            "admin_chat_id": "0"
+        }
+        with CONFIG_FILE.open("w", encoding="utf-8") as file:
+            json.dump(example, file, indent=4)
+        print(f"Created default {CONFIG_FILE} with your bot token.")
 
-  <div class="panel">
-    <h2>3. Payment method</h2>
-    <div class="options" id="paymentOptions">
-      <button class="opt active" data-payment="telebirr">📱 Telebirr</button>
-      <button class="opt" data-payment="cbe">🏦 CBE</button>
-      <button class="opt" data-payment="cash">💵 Cash</button>
-    </div>
-    <div id="paymentInfo" class="notice" style="margin-top:12px"></div>
-  </div>
+    try:
+        with CONFIG_FILE.open("r", encoding="utf-8") as file:
+            config = json.load(file)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "config.json contains invalid JSON. Check its quotes and commas."
+        ) from exc
 
-  <div class="panel hide" id="agePanel">
-    <label class="age">
-      <input type="checkbox" id="ageConfirm">
-      <span>I confirm I am of legal drinking age.</span>
-    </label>
-  </div>
+    token = str(config.get("bot_token", "")).strip()
+    admin_id_str = str(config.get("admin_chat_id", "0")).strip()
 
-  <div class="panel">
-    <p class="notice">
-      Your order will be submitted to the Telegram bot.
-      Payment is not automatically verified unless a merchant
-      payment integration is configured.
-    </p>
-    <div id="error" class="error"></div>
-    <button class="primary" style="width:100%" id="submitOrder">
-      Submit order
-    </button>
-  </div>
-</div>
+    if not token or "PASTE_YOUR" in token:
+        token = "8948007276:AAGsoN_WgJw8DrjpO6TlauHAW2fAXzRbfQU"
 
-<div id="successView" class="panel success hide">
-  <div class="big">🎉</div>
-  <h2>Order submitted!</h2>
-  <p id="successText">
-    Your order data has been sent to the Telegram bot.
-    Check your Telegram chat for confirmation.
-  </p>
-  <button class="primary" id="closeApp">Done</button>
-</div>
+    try:
+        admin_id = int(admin_id_str)
+    except ValueError:
+        admin_id = 0
 
-</div>
+    return token, admin_id
 
-<div class="cartbar" id="cartBar">
-  <div class="cartinner">
-    <div class="cartinfo">
-      <b id="cartCount">0 items</b>
-      <small id="cartTotal">0 ETB</small>
-    </div>
-    <button class="primary" id="checkoutButton" disabled>
-      View order →
-    </button>
-  </div>
-</div>
 
-<script>
-const tg = window.Telegram?.WebApp;
+# =====================================================
+# MENU AND PRICES
+# =====================================================
 
-if (tg) {
-  tg.ready();
-  tg.expand();
-  try {
-    tg.setHeaderColor('#191919');
-    tg.setBackgroundColor('#f7f5f0');
-  } catch (e) {}
+PRODUCTS = {
+    "tacos": ("Tacos", 250),
+    "special_tacos": ("Special Tacos", 300),
+    "wrap": ("Wrap", 200),
+    "special_wrap": ("Special Wrap", 250),
+    "ketchup": ("Ketchup", 40),
+    "mayonnaise": ("Mayonnaise", 40),
+    "salsacos_sauce": ("Salsacos Sauce", 50),
+    "coca_cola": ("Coca-Cola", 70),
+    "fanta": ("Fanta", 70),
+    "sprite": ("Sprite", 70),
+    "water": ("Bottled Water", 50),
+    "milkshake": ("Milkshake", 350),
+    "strawberry_shake": ("Strawberry Shake", 350),
+    "strawberry_mojito": ("Strawberry Mojito", 450),
+    "mint_mojito": ("Mint Mojito", 450),
+    "dashen_beer": ("Dashen Beer", 120),
+    "st_george_beer": ("St. George Beer", 120),
+    "arada_beer": ("Arada Beer", 120),
 }
 
-const products = [
-  {id:'tacos',name:'Tacos',emoji:'🌮',price:250,cat:'food'},
-  {id:'special_tacos',name:'Special Tacos',emoji:'🌮',price:300,cat:'food'},
-  {id:'wrap',name:'Wrap',emoji:'🌯',price:200,cat:'food'},
-  {id:'special_wrap',name:'Special Wrap',emoji:'🌯',price:250,cat:'food'},
-  {id:'ketchup',name:'Ketchup',emoji:'🍅',price:40,cat:'sauce'},
-  {id:'mayonnaise',name:'Mayonnaise',emoji:'🥣',price:40,cat:'sauce'},
-  {id:'salsacos_sauce',name:'Salsacos Sauce',emoji:'🌶️',price:50,cat:'sauce'},
-  {id:'coca_cola',name:'Coca-Cola',emoji:'🥤',price:70,cat:'soft_drinks'},
-  {id:'fanta',name:'Fanta',emoji:'🍊',price:70,cat:'soft_drinks'},
-  {id:'sprite',name:'Sprite',emoji:'🍋',price:70,cat:'soft_drinks'},
-  {id:'water',name:'Bottled Water',emoji:'💧',price:50,cat:'soft_drinks'},
-  {id:'milkshake',name:'Milkshake',emoji:'🥤',price:350,cat:'smoothies'},
-  {id:'strawberry_shake',name:'Strawberry Shake',emoji:'🍓',price:350,cat:'smoothies'},
-  {id:'strawberry_mojito',name:'Strawberry Mojito',emoji:'🍓',price:450,cat:'mojitos'},
-  {id:'mint_mojito',name:'Mint Mojito',emoji:'🌿',price:450,cat:'mojitos'},
-  {id:'dashen_beer',name:'Dashen Beer',emoji:'🍺',price:120,cat:'alcohol'},
-  {id:'st_george_beer',name:'St. George Beer',emoji:'🍺',price:120,cat:'alcohol'},
-  {id:'arada_beer',name:'Arada Beer',emoji:'🍺',price:120,cat:'alcohol'}
-];
+ORDER_TYPES = {"delivery", "pickup", "dine_in"}
+PAYMENT_TYPES = {"telebirr", "cbe", "cash"}
 
-const cats = [
-  ['food','🌮 Food'],
-  ['sauce','🥫 Sauces'],
-  ['soft_drinks','🥤 Soft drinks'],
-  ['smoothies','🍓 Shakes'],
-  ['mojitos','🍹 Mojitos'],
-  ['alcohol','🍺 Alcohol']
-];
 
-const cart = {};
-let category = 'food';
-let orderType = 'delivery';
-let payment = 'telebirr';
-let submitting = false;
+# =====================================================
+# DATABASE & MIGRATIONS
+# =====================================================
 
-const $ = id => document.getElementById(id);
-const money = n =>
-  new Intl.NumberFormat('en-US').format(n) + ' ETB';
+def init_db():
+    with sqlite3.connect(DATABASE, timeout=20) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                order_code TEXT PRIMARY KEY,
+                customer_id INTEGER DEFAULT 0,
+                telegram_user_id INTEGER DEFAULT 0,
+                customer_name TEXT DEFAULT 'Customer',
+                phone TEXT DEFAULT '',
+                items TEXT DEFAULT '',
+                order_type TEXT DEFAULT 'delivery',
+                address TEXT DEFAULT '',
+                payment_method TEXT DEFAULT 'cash',
+                subtotal INTEGER DEFAULT 0,
+                delivery_fee INTEGER DEFAULT 0,
+                total INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'PENDING',
+                created_at TEXT DEFAULT ''
+            )
+        """)
+        conn.commit()
 
-function count() {
-  return Object.values(cart).reduce((a,b) => a+b,0);
-}
 
-function subtotal() {
-  return products.reduce(
-    (sum,p) => sum + p.price*(cart[p.id]||0), 0
-  );
-}
+def save_order(order):
+    with sqlite3.connect(DATABASE, timeout=20) as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO orders (
+                order_code, customer_id, telegram_user_id, customer_name, phone, items,
+                order_type, address, payment_method,
+                subtotal, delivery_fee, total, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            order["order_code"],
+            order["customer_id"],
+            order["customer_id"],
+            order["customer_name"],
+            order["phone"],
+            order["items_text"],
+            order["order_type"],
+            order["address"],
+            order["payment_method"],
+            order["subtotal"],
+            order["delivery_fee"],
+            order["total"],
+            "PENDING",
+            order["created_at"],
+        ))
+        conn.commit()
 
-function total() {
-  return subtotal() + (orderType === 'delivery' && count() ? 50 : 0);
-}
 
-function hasAlcohol() {
-  return products.some(
-    p => p.cat === 'alcohol' && (cart[p.id]||0)>0
-  );
-}
+def new_order_code():
+    return "SAL-" + secrets.token_hex(4).upper()
 
-function renderCats() {
-  $('categories').innerHTML = cats.map(([id,label]) =>
-    `<button class="chip ${category===id?'active':''}" data-cat="${id}">${label}</button>`
-  ).join('');
 
-  document.querySelectorAll('[data-cat]').forEach(b => {
-    b.onclick = () => {
-      category = b.dataset.cat;
-      renderCats();
-      renderItems();
-    };
-  });
-}
+# =====================================================
+# TELEGRAM BOT HANDLERS
+# =====================================================
 
-function renderItems() {
-  $('categoryTitle').textContent =
-    cats.find(c => c[0] === category)?.[1] || 'Menu';
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[
+        KeyboardButton(
+            text="🍔 Open Salsacos Menu",
+            web_app=WebAppInfo(url=WEB_APP_URL),
+        )
+    ]]
 
-  const list = products.filter(p => p.cat === category);
+    await update.effective_message.reply_text(
+        "Welcome to Salsacos! 🍔\n\n"
+        "Tap the button below to browse our menu and place your order.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard,
+            resize_keyboard=True,
+        ),
+    )
 
-  $('items').innerHTML = list.map(p => `
-    <article class="item">
-      <div class="emoji">${p.emoji}</div>
-      <h3>${p.name}</h3>
-      <div class="price">${money(p.price)}</div>
-      ${cart[p.id] ? `
-        <div class="qty">
-          <button data-dec="${p.id}" aria-label="Remove one">−</button>
-          <strong>${cart[p.id]} in order</strong>
-          <button data-inc="${p.id}" aria-label="Add one">+</button>
-        </div>
-      ` : `<button class="add" data-inc="${p.id}">+ Add</button>`}
-    </article>
-  `).join('');
 
-  document.querySelectorAll('[data-inc]').forEach(b => {
-    b.onclick = () => {
-      const id = b.dataset.inc;
-      cart[id] = (cart[id]||0)+1;
-      renderItems();
-      renderCart();
-    };
-  });
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        f"Your Telegram numeric ID is: {update.effective_user.id}"
+    )
 
-  document.querySelectorAll('[data-dec]').forEach(b => {
-    b.onclick = () => {
-      const id = b.dataset.dec;
-      cart[id]--;
-      if (cart[id] <= 0) delete cart[id];
-      renderItems();
-      renderCart();
-    };
-  });
-}
 
-function renderCart() {
-  $('cartCount').textContent =
-    `${count()} item${count()===1?'':'s'}`;
-  $('cartTotal').textContent = money(total());$('checkoutButton').disabled = !count();
-}
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        "🍔 SALSACOS HELP\n\n"
+        "/start - Open the menu\n"
+        "/myid - Find your Telegram ID\n"
+        "/help - Show help\n"
+        f"Support: {SUPPORT_USERNAME}"
+    )
 
-function renderSummary() {
-  const rows = products.filter(p => cart[p.id]).map(p => `
-    <div class="summaryline">
-      <span>${p.emoji} ${p.name} × ${cart[p.id]}</span>
-      <b>${money(p.price*cart[p.id])}</b>
-    </div>
-  `).join('');
 
-  $('checkoutSummary').innerHTML =
-    rows +
-    `<div class="summaryline"><span>Subtotal</span><b>${money(subtotal())}</b></div>` +
-    (orderType === 'delivery'
-      ? `<div class="summaryline"><span>Delivery fee</span><b>50 ETB</b></div>`
-      : '');
+async def receive_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    user = update.effective_user
 
-  $('checkoutTotal').textContent = money(total());
-  $('addressWrap').classList.toggle('hide',orderType!=='delivery');$('agePanel').classList.toggle('hide',!hasAlcohol());
+    if not message or not message.web_app_data:
+        return
 
-  const infos = {
-    telebirr:'Telebirr: 0907490883. Include your order reference with your payment screenshot.',
-    cbe:'CBE account: 1000539408872. Include your order reference with your payment screenshot.',
-    cash:'Cash payment: confirm payment arrangements with the restaurant.'
-  };
+    raw_data_str = message.web_app_data.data
+    logger.info(f"Received raw web_app_data: {raw_data_str}")
 
-  $('paymentInfo').textContent = infos[payment];
-}
+    try:
+        data = json.loads(raw_data_str)
+        if not isinstance(data, dict):
+            raise ValueError("Order payload must be a JSON object.")
 
-function showCheckout() {
-  if (!count()) return;
-  $('menuView').classList.add('hide');$('checkoutView').classList.remove('hide');
-  $('cartBar').classList.add('hide');$('error').textContent = '';
-  renderSummary();
-  window.scrollTo(0,0);
-}
+        if data.get("type") != "salsacos_order":
+            await message.reply_text("Invalid order format. Please reopen the menu.")
+            return
 
-function showMenu() {
-  $('checkoutView').classList.add('hide');
-  $('menuView').classList.remove('hide');$('cartBar').classList.remove('hide');
-  window.scrollTo(0,0);
-}
+        raw_items = data.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            await message.reply_text("Your cart is empty. Please add items and try again.")
+            return
 
-document.querySelectorAll('[data-order]').forEach(b => {
-  b.onclick = () => {
-    orderType = b.dataset.order;
-    document.querySelectorAll('[data-order]').forEach(x =>
-      x.classList.toggle('active',x===b)
-    );
-    renderSummary();
-    renderCart();
-  };
-});
+        item_lines = []
+        subtotal = 0
 
-document.querySelectorAll('[data-payment]').forEach(b => {
-  b.onclick = () => {
-    payment = b.dataset.payment;
-    document.querySelectorAll('[data-payment]').forEach(x =>
-      x.classList.toggle('active',x===b)
-    );
-    renderSummary();
-  };
-});
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
 
-$('checkoutButton').onclick = showCheckout;
-$('backMenu').onclick = showMenu;
+            product_id = str(item.get("id", "")).strip().lower()
+            if product_id not in PRODUCTS:
+                continue
 
-$('gpsButton').onclick = () => {
-  if (!navigator.geolocation) {
-    $('gpsStatus').textContent =
-      'Location is unavailable. Please type your address.';
-    return;
-  }
+            name, price = PRODUCTS[product_id]
+            
+            try:
+                quantity = int(item.get("qty", 1))
+            except (ValueError, TypeError):
+                quantity = 1
 
-  $('gpsStatus').textContent = 'Requesting location…';
+            if quantity < 1:
+                quantity = 1
 
-  navigator.geolocation.getCurrentPosition(
-    pos => {
-      $('customerAddress').value =
-        `GPS coordinates: ${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
-      $('gpsStatus').textContent =
-        '✓ Location added. You can edit your address.';
-    },
-    () => {
-      $('gpsStatus').textContent =
-        'Could not access location. Please type your address.';
-    },
-    {enableHighAccuracy:true,timeout:10000}
-  );
-};
+            line_total = price * quantity
+            subtotal += line_total
+            item_lines.append(f"{name} x {quantity} = {line_total} ETB")
 
-$('submitOrder').onclick = () => {
-  if (submitting) return;
+        if not item_lines:
+            await message.reply_text("No valid products were found in your cart.")
+            return
 
-  const name = $('customerName').value.trim();
-  const phone = $('customerPhone').value.trim();
-  const address = $('customerAddress').value.trim();
+        order_type = str(data.get("order_type", "delivery")).strip().lower()
+        if order_type not in ORDER_TYPES:
+            order_type = "delivery"
 
-  let error = '';
+        payment_method = str(data.get("payment", "telebirr")).strip().lower()
+        if payment_method not in PAYMENT_TYPES:
+            payment_method = "telebirr"
 
-  if (!count()) error = 'Your cart is empty.';
-  else if (name.length < 2) error = 'Enter your full name.';
-  else if (phone.replace(/\D/g,'').length < 7)
-    error = 'Enter a valid phone number.';
-  else if (orderType === 'delivery' && address.length < 3)
-    error = 'Enter your delivery address.';
-  else if (hasAlcohol() && !$('ageConfirm').checked)
-    error = 'Please confirm your legal drinking age.';
+        customer_name = str(data.get("name") or (user.full_name if user else "Customer")).strip()
+        phone = str(data.get("phone", "")).strip()[:40]
+        address = str(data.get("address", "")).strip()[:300]
+        customer_id = user.id if user else 0
 
-  if (error) {
-    $('error').textContent = error;
-    return;
-  }
+        delivery_fee = DELIVERY_FEE if order_type == "delivery" else 0
+        total = subtotal + delivery_fee
 
-  if (!tg || typeof tg.sendData !== 'function') {
-    $('error').textContent =
-      'Open this page inside Telegram using the Salsacos bot.';
-    return;
-  }
+        order_code = new_order_code()
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        items_text = "\n".join(item_lines)
 
-  const payload = {
-    type:'salsacos_order',
-    items:products
-      .filter(p => cart[p.id])
-      .map(p => ({id:p.id,qty:cart[p.id]})),
-    order_type:orderType,
-    payment:payment,
-    name:name,
-    phone:phone,
-    address:orderType === 'delivery' ? address : 'Not required',
-    age_confirmed:$('ageConfirm').checked
-  };
+        order = {
+            "order_code": order_code,
+            "customer_id": customer_id,
+            "customer_name": customer_name,
+            "phone": phone,
+            "items_text": items_text,
+            "order_type": order_type,
+            "address": address,
+            "payment_method": payment_method,
+            "subtotal": subtotal,
+            "delivery_fee": delivery_fee,
+            "total": total,
+            "created_at": created_at,
+        }
 
-  try {
-    submitting = true;
-    $('submitOrder').disabled = true;
-    $('submitOrder').textContent = 'Submitting…';
+        # 1. Save order to database
+        save_order(order)
 
-    tg.sendData(JSON.stringify(payload));
+        order_text = (
+            "🛒 <b>NEW SALSACOS ORDER</b>\n\n"
+            f"🆔 Order: <code>{escape(order_code)}</code>\n"
+            f"👤 Customer: {escape(customer_name)}\n"
+            f"🆔 Telegram ID: <code>{customer_id}</code>\n"
+            f"📞 Phone: {escape(phone or 'Not provided')}\n"
+            f"📦 Type: {escape(order_type)}\n\n"
+            f"🍔 <b>Items:</b>\n{escape(items_text)}\n\n"
+            f"Subtotal: {subtotal} ETB\n"
+            f"Delivery: {delivery_fee} ETB\n"
+            f"💰 <b>Total: {total} ETB</b>\n"
+            f"💳 Payment: {escape(payment_method)}\n"
+            f"📍 Address: {escape(address or 'Not applicable')}\n"
+            f"🕒 Time: {escape(created_at)}\n"
+            "📌 Status: PENDING"
+        )
 
-    $('checkoutView').classList.add('hide');$('cartBar').classList.add('hide');
-    $('successView').classList.remove('hide');$('successText').textContent =
-      'Your order has been sent to the Telegram bot. ' +
-      'Check your bot chat for the order reference and payment instructions.';
+        # 2. Send order notification to channel (@salsacos)
+        try:
+            await context.bot.send_message(
+                chat_id=ORDER_CHANNEL,
+                text=order_text,
+                parse_mode="HTML",
+            )
+        except Exception as channel_err:
+            logger.exception(f"Could not send order to channel: {channel_err}")
 
-    window.scrollTo(0,0);
-  } catch (e) {
-    submitting = false;
-    $('submitOrder').disabled = false;
-    $('submitOrder').textContent = 'Submit order';$('error').textContent =
-      'Could not submit your order. Please try again.';
-  }
-};
+        # 3. Send confirmation receipt back to customer
+        if message:
+            await message.reply_text(
+                "✅ Your Salsacos order has been received!\n\n"
+                f"🆔 Order number: {order_code}\n\n"
+                f"🍔 Items:\n{items_text}\n\n"
+                f"Subtotal: {subtotal} ETB\n"
+                f"Delivery: {delivery_fee} ETB\n"
+                f"💰 Total: {total} ETB\n"
+                f"💳 Payment: {payment_method}\n\n"
+                "📌 Status: PENDING\n\n"
+                f"Support: {SUPPORT_USERNAME}\n"
+                "To order again, send /start."
+            )
 
-$('closeApp').onclick = () => {
-  if (tg) tg.close();
-};
+    except Exception as e:
+        logger.exception(f"Unexpected order processing error: {e}")
+        if message:
+            await message.reply_text(
+                f"Error processing order: {e}\nPlease contact {SUPPORT_USERNAME}."
+            )
 
-renderCats();
-renderItems();
-renderCart();
-</script>
-</body>
-</html>
+
+# =====================================================
+# EMBEDDED FRONTEND (HTML Server)
+# =====================================================
+
+class MiniAppHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/" or self.path == "/index.html":
+            if INDEX_FILE.exists():
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                with open(INDEX_FILE, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+        super().do_GET()
+
+    def log_message(self, format, *args):
+        # Suppress routine http access logs to keep console clean
+        pass
+
+
+def run_http_server():
+    server_address = ("", HTTP_PORT)
+    httpd = HTTPServer(server_address, MiniAppHandler)
+    print(f"Frontend HTTP server running on port {HTTP_PORT}...")
+    httpd.serve_forever()
+
+
+# =====================================================
+# MAIN
+# =====================================================
+
+def main():
+    token, admin_id = load_config()
+    init_db()
+
+    # Automatically create a default index.html if it doesn't exist locally
+    if not INDEX_FILE.exists():
+        with open(INDEX_FILE, "w", encoding="utf-8") as f:
+            f.write("<!DOCTYPE html><html><body><h1>Salsacos Mini App</h1><p>Please place your index.html content here.</p></body></html>")
+        print(f"Created template {INDEX_FILE}. Paste your frontend HTML content into it!")
+
+    # Start the HTTP server in a background thread
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+
+    # Start Telegram Bot
+    app = Application.builder().token(token).build()
+    app.bot_data["admin_id"] = admin_id
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.WEB_APP_DATA,
+            receive_order,
+        )
+    )
+
+    print("Salsacos backend & frontend runner is fully active. Press Ctrl+C to stop.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
